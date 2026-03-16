@@ -1,0 +1,24 @@
+{
+  "base_url": "https://example.portal",
+  "listing_url": "https://example.portal/all-items?page=1",
+  "home_url_contains": "example.portal",
+  "login_link_xpath": "//a[@title='Log in']",
+  "username_locators": [
+    { "by": "id", "value": "identifier" },
+    { "by": "name", "value": "identifier" }
+  ],
+  "password_locators": [
+    { "by": "id", "value": "credentials.passcode" },
+    { "by": "name", "value": "credentials.passcode" }
+  ],
+  "secondary_auth_button_css": "button[aria-label*='push notification']",
+  "account_menu_css": "button[aria-label*='Account Menu']",
+  "item_selector": "a.item-link",
+  "next_button_selector": "button[aria-label='Next page']",
+  "cookie_overlay_selector": "div[class*='cookie-notice']",
+  "card_ancestor_xpaths": [
+    "./ancestor::div[contains(@class,'item-root')][1]",
+    "./ancestor::article[1]",
+    "./ancestor::div[.//div[contains(@class,'actions-wrapper')]][1]"
+  ]
+}

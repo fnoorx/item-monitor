@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Local secrets
+credentials.txt
+site_config.json
+.env
+
+# Generated data and build output
+csv/
+build/
+dist/
+*.exe
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
