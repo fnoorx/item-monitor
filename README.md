@@ -23,18 +23,14 @@ The public repository keeps target URLs, credentials, and site-specific selector
 
 ## Demo
 
-Save the demo recording as `demo/item-monitor-demo.mp4`.
-
-<video src="demo/item-monitor-demo.mp4" controls width="100%"></video>
-
-[Watch the demo video](demo/item-monitor-demo.mp4)
+![Item Monitor demo](demo/item-monitor-demo.gif)
 
 ## Project Structure
 
 - `item_monitor.py` - main automation, extraction, snapshot, and comparison workflow.
 - `site_config.example.json` - public example of the selector configuration shape.
 - `requirements.txt` - external Python packages required to run the script.
-- `demo/` - portfolio demo video location.
+- `demo/` - portfolio demo media location.
 - `data/` - ignored local output directory created at runtime.
 
 ## Setup
