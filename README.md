@@ -21,11 +21,20 @@ The public repository keeps target URLs, credentials, and site-specific selector
 5. Compare the current snapshot with the previous snapshot.
 6. Save `data/listing_snapshot.json` and `data/new_items.json`.
 
+## Demo
+
+Save the demo recording as `demo/item-monitor-demo.mp4`.
+
+<video src="demo/item-monitor-demo.mp4" controls width="100%"></video>
+
+[Watch the demo video](demo/item-monitor-demo.mp4)
+
 ## Project Structure
 
 - `item_monitor.py` - main automation, extraction, snapshot, and comparison workflow.
 - `site_config.example.json` - public example of the selector configuration shape.
 - `requirements.txt` - external Python packages required to run the script.
+- `demo/` - portfolio demo video location.
 - `data/` - ignored local output directory created at runtime.
 
 ## Setup
