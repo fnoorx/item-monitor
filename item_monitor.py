@@ -1,8 +1,7 @@
-"""Authenticated item-listing monitor with daily snapshot and change detection."""
+### Authenticated listing monitor with JSON snapshots and change detection.
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-import csv
 import json
 import os
 import re
@@ -18,20 +17,38 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 
-# ------------------------------------
-# PATHS
-# ------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-CSV_DIR = BASE_DIR / "csv"
+ENV_PATH = BASE_DIR / ".env"
 SITE_CONFIG_PATH = BASE_DIR / "site_config.json"
+DATA_DIR = BASE_DIR / "data"
+SNAPSHOT_PATH = DATA_DIR / "listing_snapshot.json"
+NEW_ITEMS_PATH = DATA_DIR / "new_items.json"
+
 USERNAME_ENV_VAR = "PORTFOLIO_SCRAPER_USERNAME"
 PASSWORD_ENV_VAR = "PORTFOLIO_SCRAPER_PASSWORD"
+BASE_URL_ENV_VAR = "PORTFOLIO_TARGET_BASE_URL"
+LISTING_URL_ENV_VAR = "PORTFOLIO_TARGET_LISTING_URL"
+
+# These patterns pull stable-looking codes from links and image URLs. They are kept
+# generic so the script can be shown publicly without exposing the real site.
+ITEM_TOKEN_RE = re.compile(r"/([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+)(?=[-_.])", re.I)
+ENTRY_KEY_RE = re.compile(r"/([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)-", re.I)
 
 
-def load_site_config(filepath=SITE_CONFIG_PATH):
-    """Load target-specific selectors and URLs from a local-only config file."""
+def load_local_env(filepath: Path = ENV_PATH) -> None:
+    """Load local environment variables when python-dotenv is installed."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    load_dotenv(filepath)
+
+
+def load_site_config(filepath: Path = SITE_CONFIG_PATH) -> dict:
+    # Site-specific selectors are loaded from a local config file instead of
+    # being hardcoded into the public source.
     path = Path(filepath)
-
     if not path.is_file():
         raise FileNotFoundError(
             f"Site config '{filepath}' not found. "
@@ -40,9 +57,6 @@ def load_site_config(filepath=SITE_CONFIG_PATH):
 
     config = json.loads(path.read_text(encoding="utf-8"))
     required_keys = [
-        "base_url",
-        "listing_url",
-        "home_url_contains",
         "login_link_xpath",
         "username_locators",
         "password_locators",
@@ -50,10 +64,9 @@ def load_site_config(filepath=SITE_CONFIG_PATH):
         "account_menu_css",
         "item_selector",
         "next_button_selector",
-        "cookie_overlay_selector",
+        "overlay_selector",
         "card_ancestor_xpaths",
     ]
-
     missing = [key for key in required_keys if key not in config]
     if missing:
         raise ValueError(f"Missing required site config keys: {', '.join(missing)}")
@@ -61,104 +74,113 @@ def load_site_config(filepath=SITE_CONFIG_PATH):
     return config
 
 
-# ------------------------------------
-# ENVIRONMENT CREDENTIALS
-# ------------------------------------
-def load_credentials():
-    """Read credentials from environment variables only."""
-    env_username = os.getenv(USERNAME_ENV_VAR, "").strip()
-    env_password = os.getenv(PASSWORD_ENV_VAR, "").strip()
+def require_env_values() -> dict:
+    # The script needs URLs and credentials at runtime, but those values should
+    # stay in the environment or .env file, not in Git.
+    values = {
+        "base_url": os.getenv(BASE_URL_ENV_VAR, "").strip(),
+        "listing_url": os.getenv(LISTING_URL_ENV_VAR, "").strip(),
+        "username": os.getenv(USERNAME_ENV_VAR, "").strip(),
+        "password": os.getenv(PASSWORD_ENV_VAR, "").strip(),
+    }
 
-    return env_username, env_password
+    missing = [
+        env_var
+        for key, env_var in [
+            ("base_url", BASE_URL_ENV_VAR),
+            ("listing_url", LISTING_URL_ENV_VAR),
+            ("username", USERNAME_ENV_VAR),
+            ("password", PASSWORD_ENV_VAR),
+        ]
+        if not values[key]
+    ]
+    if missing:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+    return values
 
 
-def require_credentials(username, password, source="credentials"):
-    if not username or not password:
-        raise ValueError(
-            f"Missing username/password from {source}. "
-            f"Expected {USERNAME_ENV_VAR}/{PASSWORD_ENV_VAR}."
-        )
-    return username, password
+def resolve_by(by_name: str):
+    return getattr(By, by_name.upper())
 
 
-# ------------------------------------
-# SELENIUM HELPERS
-# ------------------------------------
-def wait_first(driver, timeout, locators):
-    """Try multiple selectors so small UI changes do not break the flow immediately."""
+def wait_first(driver, timeout: int, locators: list[dict]):
+    # Some login pages use different field attributes across sessions or UI
+    # versions, so this tries a list of possible locators in order.
     wait = WebDriverWait(driver, timeout)
     last_exc = None
 
     for locator in locators:
-        by_name = locator["by"].upper()
-        value = locator["value"]
-        by = getattr(By, by_name)
         try:
-            return wait.until(EC.presence_of_element_located((by, value)))
+            by = resolve_by(locator["by"])
+            return wait.until(EC.presence_of_element_located((by, locator["value"])))
         except Exception as exc:
             last_exc = exc
+
     raise last_exc
 
 
-def authenticate(driver, username, password, config):
-    """Complete the sign-in flow, including the secondary auth prompt."""
+def authenticate(driver, username: str, password: str, config: dict) -> None:
+    # Complete the sign-in flow using selectors from the local config. The
+    # function waits for each step so it does not race against page loading.
     login_link = WebDriverWait(driver, 30).until(
         EC.element_to_be_clickable((By.XPATH, config["login_link_xpath"]))
     )
-    url = login_link.get_attribute("href")
-    driver.get(url)
+    driver.get(login_link.get_attribute("href"))
 
     username_el = wait_first(driver, 20, config["username_locators"])
     username_el.clear()
     username_el.send_keys(username + Keys.ENTER)
 
-    secondary_auth_button = WebDriverWait(driver, 30).until(
+    secondary_button = WebDriverWait(driver, 30).until(
         EC.element_to_be_clickable((By.CSS_SELECTOR, config["secondary_auth_button_css"]))
     )
-    secondary_auth_button.click()
+    secondary_button.click()
 
     password_el = wait_first(driver, 20, config["password_locators"])
     password_el.clear()
     password_el.send_keys(password + Keys.ENTER)
 
 
-def wait_for_home(driver, config, timeout=300):
-    wait = WebDriverWait(driver, timeout)
-    home_fragment = config["home_url_contains"].lower()
-
-    wait.until(lambda d: home_fragment in d.current_url.lower())
-    wait.until(
+def wait_for_authenticated_state(driver, config: dict, timeout: int = 300) -> None:
+    # After login, wait for an element that only appears for signed-in users.
+    WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, config["account_menu_css"]))
     )
 
 
-# ------------------------------------
-# ABORT EVENT SETUP
-# ------------------------------------
 def setup_abort_event():
+    # Ctrl+C sets an event instead of stopping immediately. This lets the script
+    # save whatever data it already collected.
     abort_event = threading.Event()
+    previous_handler = None
 
     def handle_sigint(sig, frame):
-        print("\nAbort requested (Ctrl+C). Finishing up...")
+        print("\nAbort requested. Finishing current work...")
         abort_event.set()
 
     try:
+        previous_handler = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, handle_sigint)
     except Exception:
         pass
 
-    return abort_event
+    return abort_event, previous_handler
 
 
-# ------------------------------------
-# SCRAPING FUNCTIONS
-# ------------------------------------
-ITEM_TOKEN_RE = re.compile(r"/([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+)(?=[-_.])", re.I)
-ENTRY_KEY_RE = re.compile(r"/([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*)-", re.I)
+def restore_signal_handler(previous_handler) -> None:
+    if previous_handler is None:
+        return
+
+    try:
+        signal.signal(signal.SIGINT, previous_handler)
+    except Exception:
+        pass
 
 
-def load_page(driver, item_selector, timeout=30, stable_for=0.8):
-    """Wait until listing content appears and stops changing due to lazy loading."""
+def load_page(driver, item_selector: str, timeout: int = 30, stable_for: float = 0.8) -> None:
+    # Dynamic pages often keep loading entries after the first item appears.
+    # This waits until the item count has stayed the same for a short time.
     wait = WebDriverWait(driver, timeout)
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, item_selector)))
 
@@ -176,23 +198,29 @@ def load_page(driver, item_selector, timeout=30, stable_for=0.8):
         time.sleep(0.2)
 
 
-def clear_overlay_if_present(driver, overlay_selector):
-    """Dismiss blocking notices that can intercept clicks during pagination."""
+def clear_overlay_if_present(driver, overlay_selector: str) -> None:
+    # Popups and notices can block the next-page click. Try a normal close first,
+    # then hide the overlay if no usable button is found.
     overlays = driver.find_elements(By.CSS_SELECTOR, overlay_selector)
-    if overlays:
-        buttons = overlays[0].find_elements(By.CSS_SELECTOR, "button")
-        for button in buttons:
-            txt = (button.text or "").lower()
-            if any(k in txt for k in ["understand", "accept", "agree", "ok", "got it", "close"]):
-                try:
-                    button.click()
-                    return
-                except Exception:
-                    pass
-        driver.execute_script("arguments[0].style.display='none';", overlays[0])
+    if not overlays:
+        return
+
+    buttons = overlays[0].find_elements(By.CSS_SELECTOR, "button")
+    for button in buttons:
+        text = (button.text or "").lower()
+        if any(keyword in text for keyword in ["understand", "accept", "agree", "ok", "got it", "close"]):
+            try:
+                button.click()
+                return
+            except Exception:
+                pass
+
+    driver.execute_script("arguments[0].style.display='none';", overlays[0])
 
 
-def click_next_safely(driver, next_button, overlay_selector):
+def click_next_safely(driver, next_button, overlay_selector: str) -> bool:
+    # Pagination clicks can fail if a sticky overlay gets in the way, so this
+    # retries after clearing overlays before using a JavaScript click fallback.
     for _ in range(3):
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", next_button)
@@ -205,17 +233,19 @@ def click_next_safely(driver, next_button, overlay_selector):
     return True
 
 
-def urls_from_img(img, abort_event=None):
+def urls_from_image(image, abort_event=None) -> list[str]:
+    # Images can store URLs in several attributes depending on lazy loading and
+    # responsive image markup, so collect every candidate URL we can inspect.
     urls = []
 
     try:
         for attr in ("src", "data-src"):
-            value = img.get_attribute(attr) or ""
+            value = image.get_attribute(attr) or ""
             if value:
                 urls.append(value)
 
         for attr in ("srcset", "data-srcset"):
-            value = img.get_attribute(attr) or ""
+            value = image.get_attribute(attr) or ""
             if not value:
                 continue
             for part in value.split(","):
@@ -230,66 +260,61 @@ def urls_from_img(img, abort_event=None):
     return urls
 
 
-def extract_item_codes(card_el, href=None, abort_event=None):
-    """Collect identifier-like tokens from image URLs, with HTML fallback when needed."""
+def extract_item_tokens(card_el, href=None, abort_event=None) -> list[str]:
+    # Prefer codes found in image URLs because they are usually more stable than
+    # display text. The link is used as a guard so unrelated image codes are not kept.
     base = None
     if href:
         match = ENTRY_KEY_RE.search(href)
         if match:
             base = match.group(1).lower()
 
-    codes, seen = [], set()
-    # Prefer listing imagery first, then fall back to any image if the markup is inconsistent.
-    imgs = card_el.find_elements(By.CSS_SELECTOR, "img[class*='item-image'], picture source")
+    tokens, seen = [], set()
+    images = card_el.find_elements(By.CSS_SELECTOR, "img, picture source")
 
-    if not imgs:
-        imgs = card_el.find_elements(By.CSS_SELECTOR, "img")
-
-    for img in imgs:
+    for image in images:
         if abort_event is not None and abort_event.is_set():
             break
 
-        for url in urls_from_img(img, abort_event=abort_event):
+        for url in urls_from_image(image, abort_event=abort_event):
             match = ITEM_TOKEN_RE.search(url)
             if not match:
                 continue
-            code = match.group(1).upper()
 
-            if base and not (code.lower().startswith(base + "-") or code.lower().startswith(base + "_")):
+            token = match.group(1).upper().replace("_", "-")
+            if base and not token.lower().startswith(base + "-"):
                 continue
-            if code not in seen:
-                seen.add(code)
-                codes.append(code)
+            if token not in seen:
+                seen.add(token)
+                tokens.append(token)
 
-    if not codes:
-        # Some pages expose image URLs only in raw tile HTML until hydration completes.
-        try:
-            html = card_el.get_attribute("innerHTML") or ""
-            fallback = extract_item_codes_from_html(html, base=base)
-            if fallback:
-                return fallback
-        except Exception:
-            pass
+    if tokens:
+        return tokens
 
-    return ", ".join(codes)
+    # Some pages keep image URLs in raw HTML before Selenium exposes them as
+    # attributes, so parse the card markup as a fallback.
+    try:
+        return extract_item_tokens_from_html(card_el.get_attribute("innerHTML") or "", base=base)
+    except Exception:
+        return []
 
 
-def extract_item_codes_from_html(html, base=None):
-    codes, seen = [], set()
+def extract_item_tokens_from_html(html: str, base=None) -> list[str]:
+    tokens, seen = [], set()
     for match in ITEM_TOKEN_RE.finditer(html or ""):
-        code = match.group(1).upper().replace("_", "-")
-
-        if base and not code.lower().startswith(base + "-"):
+        token = match.group(1).upper().replace("_", "-")
+        if base and not token.lower().startswith(base + "-"):
             continue
+        if token not in seen:
+            seen.add(token)
+            tokens.append(token)
 
-        if code not in seen:
-            seen.add(code)
-            codes.append(code)
-
-    return ", ".join(codes)
+    return tokens
 
 
-def wait_for_tile_to_have_code(card_el, timeout=1.5):
+def wait_for_card_token(card_el, timeout: float = 1.5) -> bool:
+    # Give lazy-loaded card content a short second chance before accepting that
+    # no token was available for this entry.
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -302,28 +327,31 @@ def wait_for_tile_to_have_code(card_el, timeout=1.5):
     return False
 
 
-def find_item_card(anchor, card_ancestor_xpaths):
+def find_item_card(anchor, card_ancestor_xpaths: list[str]):
+    # The clickable link may be nested inside a larger card. The config provides
+    # a few ancestor paths so the scraper can find the full card container.
     for xpath in card_ancestor_xpaths:
         try:
             return anchor.find_element(By.XPATH, xpath)
         except Exception:
             continue
-    raise ValueError("Could not locate the item card ancestor for this entry.")
+    raise ValueError("Could not locate card ancestor for entry.")
 
 
-def scrape(driver, config, abort_event):
-    """Traverse the full listing, extract item data, and write a daily snapshot."""
+def scrape(driver, config: dict, listing_url: str, abort_event) -> list[dict]:
+    # Main scraping loop: visit each listing page, collect entry data, then move
+    # through pagination until there are no more pages or the user aborts.
     items = []
     item_selector = config["item_selector"]
     next_selector = config["next_button_selector"]
-    overlay_selector = config["cookie_overlay_selector"]
+    overlay_selector = config["overlay_selector"]
 
-    driver.get(config["listing_url"])
+    driver.get(listing_url)
 
     try:
         while True:
             if abort_event.is_set():
-                print("Abort event detected. Ending scrape.")
+                print("Abort requested. Ending scrape.")
                 break
 
             load_page(driver, item_selector, timeout=30, stable_for=0.8)
@@ -332,8 +360,8 @@ def scrape(driver, config, abort_event):
 
             for anchor in item_links:
                 if abort_event.is_set():
-                    print("Abort during item loop. Ending scrape.")
-                    return write_csv(items)
+                    print("Abort requested during item loop.")
+                    return items
 
                 name = anchor.text.strip()
                 href = anchor.get_attribute("href")
@@ -342,25 +370,23 @@ def scrape(driver, config, abort_event):
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", card)
                 time.sleep(0.05)
 
-                item_codes = extract_item_codes(card, href=href, abort_event=abort_event)
-
-                if not item_codes:
-                    # Give lazy-loaded tiles a second chance before accepting missing codes.
-                    wait_for_tile_to_have_code(card, timeout=1.5)
-                    item_codes = extract_item_codes(card, href=href, abort_event=abort_event)
+                # Scrolling helps lazy-loaded images render before token extraction.
+                item_tokens = extract_item_tokens(card, href=href, abort_event=abort_event)
+                if not item_tokens:
+                    wait_for_card_token(card, timeout=1.5)
+                    item_tokens = extract_item_tokens(card, href=href, abort_event=abort_event)
 
                 items.append(
                     {
-                        "item_name": name,
+                        "name": name,
                         "link": href,
-                        "item_codes": item_codes,
+                        "tokens": item_tokens,
                     }
                 )
 
             next_button = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, next_selector))
             )
-
             if next_button.get_attribute("disabled") is not None:
                 print("No more pages. Scraping completed.")
                 break
@@ -369,130 +395,122 @@ def scrape(driver, config, abort_event):
             clear_overlay_if_present(driver, overlay_selector)
             click_next_safely(driver, next_button, overlay_selector)
 
+            # Wait for the old page content to go stale so the next loop reads
+            # the new page instead of scraping the same entries again.
             if first_item is not None:
                 WebDriverWait(driver, 30).until(EC.staleness_of(first_item))
 
     except KeyboardInterrupt:
         abort_event.set()
-        print("KeyboardInterrupt caught. Saving partial results...")
+        print("Keyboard interrupt caught. Saving partial results...")
     except (WebDriverException, ConnectionResetError) as exc:
         if abort_event.is_set():
-            print(f"Abort + driver error ({type(exc).__name__}). Saving partial results...")
+            print(f"Abort plus driver error ({type(exc).__name__}). Saving partial results...")
         else:
-            print(
-                f"WebDriver error ({type(exc).__name__}): {exc}. "
-                "Saving partial results anyway..."
-            )
+            print(f"WebDriver error ({type(exc).__name__}): {exc}. Saving partial results...")
 
-    return write_csv(items)
+    return items
 
 
-# ------------------------------------
-# CSV FUNCTIONS
-# ------------------------------------
-def write_csv(items):
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"all_items_{today_str}.csv"
-
-    CSV_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = CSV_DIR / filename
-
-    if file_path.exists():
-        print(f"File {file_path} already exists. Skipping write.")
-        return str(file_path)
-
-    with open(file_path, "w", newline="", encoding="utf-8") as file:
-        field_names = ["item_name", "link", "item_codes"]
-        writer = csv.DictWriter(file, fieldnames=field_names)
-        writer.writeheader()
-        writer.writerows(items)
-
-    print(f"CSV saved as {filename}")
-    return str(file_path)
+def normalize_link(link: str) -> str:
+    # Links are used as stable snapshot keys. Normalizing reduces false changes
+    # from casing, spaces, or optional suffixes.
+    return (link or "").lower().strip().removesuffix(".html")
 
 
-def find_recent_csv(csv_dir: Path, days_back: int = 10):
-    for days_ago in range(1, days_back + 1):
-        date_string = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
-        path = csv_dir / f"all_items_{date_string}.csv"
-        if path.exists():
-            return str(path)
-    return None
+def load_snapshot(snapshot_path: Path = SNAPSHOT_PATH) -> dict:
+    # If this is the first run, there is no previous snapshot to compare against.
+    if not snapshot_path.exists():
+        return {}
+
+    with snapshot_path.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+
+    items = payload.get("items", {})
+    if not isinstance(items, dict):
+        return {}
+
+    return items
 
 
-def compare_csv(old_file, new_file):
-    """Compare consecutive snapshots and export only newly seen items."""
-    import pandas as pd
-    from pandas.errors import EmptyDataError, ParserError
-
-    def normalize_links(series):
-        # Normalize links so cosmetic suffix differences do not create false positives.
-        values = series.fillna("").astype(str)
-        return values.str.lower().str.strip().str.replace(r"\.html$", "", regex=True)
-
-    try:
-        old_df = pd.read_csv(old_file)
-        new_df = pd.read_csv(new_file)
-    except (EmptyDataError, ParserError) as exc:
-        print(f"CSV read error: {exc}. Skipping comparison.")
-        return None
-
-    if "link" not in old_df.columns or "link" not in new_df.columns:
-        print("Missing required 'link' column. Skipping comparison.")
-        return None
-
-    old_df["normalized_link"] = normalize_links(old_df["link"])
-    new_df["normalized_link"] = normalize_links(new_df["link"])
-
-    new_items = new_df[~new_df["normalized_link"].isin(old_df["normalized_link"])].drop(
-        columns=["normalized_link"]
-    )
-
-    print(f"\nCompared {len(new_df)} items (new) with {len(old_df)} (old).")
-
-    if new_items.empty:
-        print("No new items found.")
-        return None
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    CSV_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = CSV_DIR / f"new_items_{today_str}.csv"
-
-    if output_path.exists():
-        print(f"File {output_path} already exists. Skipping write.")
-        return str(output_path)
-
-    new_items.to_csv(output_path, index=False)
-    print(f"New items saved to: {output_path}")
-
-    return str(output_path)
+def build_snapshot(current_items: list[dict]) -> dict:
+    # Store entries in a dictionary keyed by normalized link so comparison is a
+    # simple lookup instead of a nested loop.
+    snapshot = {}
+    for item in current_items:
+        key = normalize_link(item.get("link"))
+        if not key:
+            continue
+        snapshot[key] = {
+            "name": item.get("name"),
+            "link": item.get("link"),
+            "tokens": item.get("tokens", []),
+        }
+    return snapshot
 
 
-# ------------------------------------
-# MAIN
-# ------------------------------------
+def save_snapshot(
+    current_items: list[dict],
+    new_items: list[dict],
+    snapshot_path: Path = SNAPSHOT_PATH,
+    new_items_path: Path = NEW_ITEMS_PATH,
+) -> None:
+    # Write both the full current state and the smaller "new only" report.
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    with snapshot_path.open("w", encoding="utf-8") as file:
+        json.dump(
+            {
+                "saved_at": datetime.now().isoformat(),
+                "items": build_snapshot(current_items),
+            },
+            file,
+            indent=2,
+        )
+
+    new_items_path.parent.mkdir(parents=True, exist_ok=True)
+    with new_items_path.open("w", encoding="utf-8") as file:
+        json.dump(
+            {
+                "saved_at": datetime.now().isoformat(),
+                "new_items": build_snapshot(new_items),
+            },
+            file,
+            indent=2,
+        )
+
+
+def find_new_items(previous_snapshot: dict, current_items: list[dict]) -> list[dict]:
+    # Anything with a normalized link that was not in the previous snapshot is
+    # treated as newly discovered.
+    new_items = []
+    for item in current_items:
+        key = normalize_link(item.get("link"))
+        if key not in previous_snapshot:
+            new_items.append(item)
+
+    return new_items
+
+
 def main():
-    """Run authentication, scrape the current snapshot, then diff against a recent run."""
-    abort_event = setup_abort_event()
-    config = load_site_config(SITE_CONFIG_PATH)
-
-    username, password = load_credentials()
-    username, password = require_credentials(
-        username,
-        password,
-        "environment variables",
-    )
+    # High-level run order: load configuration, sign in, scrape, compare, save.
+    load_local_env()
+    config = load_site_config()
+    env_values = require_env_values()
+    abort_event, previous_handler = setup_abort_event()
+    current_items = []
+    previous_snapshot = {}
 
     driver = webdriver.Chrome()
-
     try:
-        driver.get(config["base_url"])
-        authenticate(driver, username, password, config)
-        wait_for_home(driver, config, timeout=300)
+        previous_snapshot = load_snapshot()
 
-        old_file_path = find_recent_csv(CSV_DIR, days_back=10)
-        new_file_path = scrape(driver, config, abort_event)
+        driver.get(env_values["base_url"])
+        authenticate(driver, env_values["username"], env_values["password"], config)
+        wait_for_authenticated_state(driver, config, timeout=300)
+
+        current_items = scrape(driver, config, env_values["listing_url"], abort_event)
     finally:
+        restore_signal_handler(previous_handler)
         try:
             driver.quit()
         except Exception:
@@ -505,12 +523,12 @@ def main():
             except Exception:
                 pass
 
-    if old_file_path:
-        compare_csv(old_file_path, new_file_path)
-    else:
-        print("No old CSV file found in the last 10 days. Skipping comparison.")
+    new_items = find_new_items(previous_snapshot, current_items)
+    save_snapshot(current_items, new_items)
 
+    print(f"Found {len(new_items)} new items.")
     print("Script complete.")
+    return new_items
 
 
 if __name__ == "__main__":

@@ -1,2 +1,2 @@
-selenium
-pandas
+selenium>=4.16
+python-dotenv>=1.0

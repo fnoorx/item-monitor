@@ -1,89 +1,74 @@
 # Item Monitor
 
-Automated monitoring tool for an authenticated item listing. It logs into a protected site, scrapes the full catalog with Selenium, stores a dated CSV snapshot, and generates a second CSV containing only newly detected items.
+A portfolio-safe Python automation project for monitoring an authenticated web listing. The script signs in with Selenium, walks a paginated listing, extracts stable entry data, saves a JSON snapshot, and writes a separate report for entries that were not present in the previous run.
 
-This repository is intentionally portfolio-safe. Target URLs, selectors, and credentials are kept out of source control so the project demonstrates the engineering work without exposing the original data source.
+The public repository keeps target URLs, credentials, and site-specific selectors out of source control. Runtime details live in local environment variables and an ignored `site_config.json` file.
 
-## Why this project matters
+## What It Demonstrates
 
-This is a practical automation project that shows:
+- Authenticated browser automation with Selenium and explicit waits.
+- Resilient handling for dynamic pages, lazy-loaded content, overlays, and pagination.
+- Local snapshot persistence with repeat-run change detection.
+- Config-driven selectors so target-specific details stay out of public code.
+- Graceful interruption support that preserves partial scrape results.
 
-- browser automation against a real authenticated workflow
-- resilient scraping across dynamic page states, lazy loading, and pagination
-- daily snapshot generation and diff-based change detection
-- separation of public code from private runtime configuration
-- packaging readiness for local distribution with PyInstaller
+## Workflow
 
-## Recruiter Summary
-
-**Problem solved:** manually checking a private listing for new items was incredibly repetitive, time consuming, and easy to miss.
-
-**Approach:** automate login, navigate the listing, normalize and export scraped records, then compare the latest snapshot against a recent prior run.
-
-**Result:** the script produces a complete daily archive and a focused `new_items_YYYY-MM-DD.csv` report for anything newly listed.
-
-## Technical Highlights
-
-- **Authenticated Selenium flow** using explicit waits and multi-selector fallback logic for login fields.
-- **Dynamic page handling** that waits for listing content to stabilize before scraping lazy-loaded results.
-- **Pagination resilience** with overlay dismissal and guarded next-page clicking to reduce brittle failures.
-- **Structured extraction pipeline** that derives item identifiers from image URLs and falls back when markup is inconsistent.
-- **Operational safety** through environment-based credential loading and local-only site configuration.
-- **Change detection** using Pandas to compare current and prior snapshots and isolate net-new items.
-- **Interrupt handling** so a user can stop a run cleanly with `Ctrl+C`.
-
-## Stack
-
-- Python
-- Selenium
-- Pandas
-- Chrome WebDriver
-- PyInstaller
+1. Load local runtime settings from environment variables or `.env`.
+2. Load selector configuration from `site_config.json`.
+3. Open the target entry point and complete the sign-in flow.
+4. Navigate to the listing URL and collect entries across pages.
+5. Compare the current snapshot with the previous snapshot.
+6. Save `data/listing_snapshot.json` and `data/new_items.json`.
 
 ## Project Structure
 
-- `item_monitor.py` - main automation and comparison workflow
-- `site_config.example.json` - example target configuration schema
-- `item_monitor.spec` - PyInstaller build configuration
-- `csv/` - local output folder for generated snapshots
+- `item_monitor.py` - main automation, extraction, snapshot, and comparison workflow.
+- `site_config.example.json` - public example of the selector configuration shape.
+- `requirements.txt` - external Python packages required to run the script.
+- `data/` - ignored local output directory created at runtime.
 
 ## Setup
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
+Create and activate a virtual environment, then install dependencies:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-3. Copy `site_config.example.json` to `site_config.json`.
-4. Add your private target URL and selector values to `site_config.json`.
-5. Provide credentials through environment variables:
+Copy the example selector config and fill in local values:
 
 ```powershell
-$env:PORTFOLIO_SCRAPER_USERNAME="your_username"
-$env:PORTFOLIO_SCRAPER_PASSWORD="your_password"
+Copy-Item site_config.example.json site_config.json
 ```
 
-## Run
+Provide runtime settings through environment variables or an ignored `.env` file:
+
+```powershell
+$env:PORTFOLIO_TARGET_BASE_URL="<base URL>"
+$env:PORTFOLIO_TARGET_LISTING_URL="<listing URL>"
+$env:PORTFOLIO_SCRAPER_USERNAME="<username>"
+$env:PORTFOLIO_SCRAPER_PASSWORD="<password>"
+```
+
+Run the monitor:
 
 ```powershell
 python item_monitor.py
 ```
 
-Generated outputs:
+## Outputs
 
-- `csv/all_items_YYYY-MM-DD.csv`
-- `csv/new_items_YYYY-MM-DD.csv` when new items are found
+- `data/listing_snapshot.json` - latest complete snapshot keyed by normalized link.
+- `data/new_items.json` - entries found in the latest run that were absent from the previous snapshot.
 
-## Privacy and Publishing Notes
+## Publishing Notes
 
-Keep these out of Git:
+The following files and folders should stay local:
 
+- `.env`
 - `site_config.json`
-- `csv/`
-- `build/`
-- `dist/`
-- `*.exe`
+- `data/`
+- logs, screenshots, browser profiles, and packaged binaries
 
-Before publishing, review `git status` and confirm no target-specific data, generated outputs, or packaged binaries are tracked.
+Before publishing, run `git status --ignored --short` and confirm only portfolio-safe source files are tracked.

@@ -1,24 +1,20 @@
 {
-  "base_url": "https://example.portal",
-  "listing_url": "https://example.portal/all-items?page=1",
-  "home_url_contains": "example.portal",
-  "login_link_xpath": "//a[@title='Log in']",
+  "login_link_xpath": "//a[contains(@href, 'login') or contains(normalize-space(.), 'Log in')]",
   "username_locators": [
-    { "by": "id", "value": "identifier" },
-    { "by": "name", "value": "identifier" }
+    { "by": "css_selector", "value": "input[type='email']" },
+    { "by": "css_selector", "value": "input[name*='user']" }
   ],
   "password_locators": [
-    { "by": "id", "value": "credentials.passcode" },
-    { "by": "name", "value": "credentials.passcode" }
+    { "by": "css_selector", "value": "input[type='password']" }
   ],
-  "secondary_auth_button_css": "button[aria-label*='push notification']",
-  "account_menu_css": "button[aria-label*='Account Menu']",
-  "item_selector": "a.item-link",
-  "next_button_selector": "button[aria-label='Next page']",
-  "cookie_overlay_selector": "div[class*='cookie-notice']",
+  "secondary_auth_button_css": "button[type='submit']",
+  "account_menu_css": "button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']",
+  "item_selector": "a[href]",
+  "next_button_selector": "button[aria-label*='next'], a[rel='next']",
+  "overlay_selector": "[role='dialog'], [class*='overlay']",
   "card_ancestor_xpaths": [
-    "./ancestor::div[contains(@class,'item-root')][1]",
     "./ancestor::article[1]",
-    "./ancestor::div[.//div[contains(@class,'actions-wrapper')]][1]"
+    "./ancestor::li[1]",
+    "./ancestor::div[.//a][1]"
   ]
 }

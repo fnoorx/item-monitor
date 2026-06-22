@@ -2,16 +2,24 @@
 __pycache__/
 *.pyc
 
-# Local secrets
+# Local configuration
+.agents
 credentials.txt
 site_config.json
 .env
+.env.*
+!.env.example
 
 # Generated data and build output
-csv/
+data/
 build/
 dist/
 *.exe
+*.zip
+*.log
+screenshots/
+downloads/
+chrome-profile/
 
 # OS/editor noise
 .DS_Store
